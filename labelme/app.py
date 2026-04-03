@@ -100,6 +100,10 @@ class _DockWidgets(NamedTuple):
     file_dock: QtWidgets.QDockWidget
     file_search: QtWidgets.QLineEdit
     file_list: QtWidgets.QListWidget
+    image_dir_dock: QtWidgets.QDockWidget
+    image_dir_list: QtWidgets.QListWidget
+    output_dir_dock: QtWidgets.QDockWidget
+    output_dir_list: QtWidgets.QListWidget
 
 
 class _Actions(NamedTuple):
@@ -196,6 +200,8 @@ class MainWindow(QtWidgets.QMainWindow):
     _brightness_contrast_values: dict[str, tuple[int | None, int | None]]
     _scroll_values: dict[Qt.Orientation, dict[str, float]]
     _default_state: QtCore.QByteArray
+    _image_dir_history: list[str]
+    _output_dir_history: list[str]
 
     def __init__(
         self,
@@ -918,6 +924,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 actions=[
                     self._actions.open,
                     self._actions.open_dir,
+                    self._actions.change_output_dir,
                     self._actions.open_prev_img,
                     self._actions.open_next_img,
                     self._actions.save,
@@ -993,11 +1000,15 @@ class MainWindow(QtWidgets.QMainWindow):
         #
         # Bump this when dock/toolbar layout changes to reset window state
         # for users upgrading from an older version.
-        SETTINGS_VERSION: int = 1
+        SETTINGS_VERSION: int = 2
         if self._window_state.value("settingsVersion", 0, type=int) != SETTINGS_VERSION:
             self._reset_layout()
             self._window_state.setValue("settingsVersion", SETTINGS_VERSION)
         #
+        self._image_dir_history = self._window_state.value("imageDirHistory", []) or []
+        self._output_dir_history = (
+            self._window_state.value("outputDirHistory", []) or []
+        )
         self.resize(
             cast(
                 QtCore.QSize,
@@ -1025,6 +1036,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if file_or_dir:
             self._load_from_file_or_dir(file_or_dir=file_or_dir)
+
+        if self._prev_opened_dir:
+            self._add_dir_history(self._image_dir_history, self._prev_opened_dir)
+        if self._output_dir:
+            self._add_dir_history(self._output_dir_history, self._output_dir)
+        self._refresh_dir_history_widgets()
 
     def _setup_status_bar(self) -> _StatusBarWidgets:
         message = QtWidgets.QLabel(self.tr("%s started.") % __appname__)
@@ -1153,11 +1170,25 @@ class MainWindow(QtWidgets.QMainWindow):
         file_list_container.setLayout(file_list_layout)
         file.setWidget(file_list_container)
 
+        image_dir_list = QtWidgets.QListWidget()
+        image_dir_list.itemClicked.connect(self._open_image_dir_from_history)
+        image_dir = QtWidgets.QDockWidget(self.tr("Image Dirs"), self)
+        image_dir.setObjectName("Image Dirs")
+        image_dir.setWidget(image_dir_list)
+
+        output_dir_list = QtWidgets.QListWidget()
+        output_dir_list.itemClicked.connect(self._open_output_dir_from_history)
+        output_dir = QtWidgets.QDockWidget(self.tr("Output Dirs"), self)
+        output_dir.setObjectName("Output Dirs")
+        output_dir.setWidget(output_dir_list)
+
         for config_key, dock_widget in [
             ("flag_dock", flag),
             ("label_dock", label),
             ("shape_dock", shape),
             ("file_dock", file),
+            ("file_dock", image_dir),
+            ("file_dock", output_dir),
         ]:
             features = QtWidgets.QDockWidget.DockWidgetFeature()
             if self._config[config_key]["closable"]:
@@ -1189,6 +1220,10 @@ class MainWindow(QtWidgets.QMainWindow):
             file_dock=file,
             file_search=file_search,
             file_list=file_list,
+            image_dir_dock=image_dir,
+            image_dir_list=image_dir_list,
+            output_dir_dock=output_dir,
+            output_dir_list=output_dir_list,
         )
 
     def _load_config(
@@ -1409,6 +1444,86 @@ class MainWindow(QtWidgets.QMainWindow):
         self._image_path = None
         self._label_file_path = None
         self._canvas_widgets.canvas.reset_state()
+
+    def _add_dir_history(self, history: list[str], directory: str | None) -> None:
+        if not directory:
+            return
+        directory = osp.normpath(directory)
+        if directory in history:
+            history.remove(directory)
+        elif len(history) >= self._max_recent:
+            history.pop()
+        history.insert(0, directory)
+
+    def _refresh_dir_history_widget(
+        self,
+        widget: QtWidgets.QListWidget,
+        history: list[str],
+        current_dir: str | None,
+    ) -> None:
+        widget.blockSignals(True)
+        widget.clear()
+        current_dir = osp.normpath(current_dir) if current_dir else None
+        for directory in history:
+            item = QtWidgets.QListWidgetItem(directory)
+            item.setData(Qt.UserRole, directory)
+            widget.addItem(item)
+            if current_dir and osp.normpath(directory) == current_dir:
+                widget.setCurrentItem(item)
+        widget.blockSignals(False)
+
+    def _refresh_dir_history_widgets(self) -> None:
+        self._refresh_dir_history_widget(
+            self._docks.image_dir_list, self._image_dir_history, self._prev_opened_dir
+        )
+        self._refresh_dir_history_widget(
+            self._docks.output_dir_list, self._output_dir_history, self._output_dir
+        )
+
+    def _set_output_dir(self, output_dir: str | Path) -> None:
+        output_dir = Path(output_dir)
+        self._output_dir = output_dir
+        self._add_dir_history(self._output_dir_history, str(output_dir))
+        self._refresh_dir_history_widgets()
+
+        self.statusBar().showMessage(
+            self.tr("%s . Annotations will be saved/loaded in %s")
+            % ("Change Annotations Dir", self._output_dir)
+        )
+        self.statusBar().show()
+
+        current_image_path = self._image_path
+        self._import_images_from_dir(root_dir=self._prev_opened_dir)
+
+        if current_image_path in self.image_list:
+            self._docks.file_list.setCurrentRow(
+                self.image_list.index(current_image_path)
+            )
+            self._docks.file_list.repaint()
+
+    def _open_image_dir(self, target_dir_path: str, open_next_image: bool = True) -> None:
+        if not target_dir_path:
+            return
+        self._add_dir_history(self._image_dir_history, target_dir_path)
+        self._refresh_dir_history_widgets()
+        self._import_images_from_dir(root_dir=target_dir_path)
+        if open_next_image:
+            self._open_next_image()
+
+    def _open_image_dir_from_history(self, item: QtWidgets.QListWidgetItem) -> None:
+        target_dir_path = item.data(Qt.UserRole)
+        if not target_dir_path or not osp.isdir(target_dir_path):
+            return
+        if not self._can_continue():
+            self._refresh_dir_history_widgets()
+            return
+        self._open_image_dir(target_dir_path)
+
+    def _open_output_dir_from_history(self, item: QtWidgets.QListWidgetItem) -> None:
+        output_dir = item.data(Qt.UserRole)
+        if not output_dir or not osp.isdir(output_dir):
+            return
+        self._set_output_dir(output_dir)
 
     # Callbacks
 
@@ -2110,6 +2225,10 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         self._image = image
+        assert self._image_path is not None
+        self._prev_opened_dir = str(Path(self._image_path).parent)
+        self._add_dir_history(self._image_dir_history, self._prev_opened_dir)
+        self._refresh_dir_history_widgets()
         t0 = time.time()
         self._canvas_widgets.canvas.load_pixmap(QtGui.QPixmap.fromImage(image))
         logger.debug("Loaded pixmap in {:.0f}ms", (time.time() - t0) * 1000)
@@ -2211,6 +2330,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._window_state.setValue("window/size", self.size())
         self._window_state.setValue("window/position", self.pos())
         self._window_state.setValue("window/state", self.saveState())
+        self._window_state.setValue("imageDirHistory", self._image_dir_history)
+        self._window_state.setValue("outputDirHistory", self._output_dir_history)
 
     def dragEnterEvent(self, a0: QtGui.QDragEnterEvent) -> None:
         extensions = [
@@ -2292,24 +2413,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if not output_dir:
             return
-
-        self._output_dir = Path(output_dir)
-
-        self.statusBar().showMessage(
-            self.tr("%s . Annotations will be saved/loaded in %s")
-            % ("Change Annotations Dir", self._output_dir)
-        )
-        self.statusBar().show()
-
-        current_image_path = self._image_path
-        self._import_images_from_dir(root_dir=self._prev_opened_dir)
-
-        if current_image_path in self.image_list:
-            # retain currently selected file
-            self._docks.file_list.setCurrentRow(
-                self.image_list.index(current_image_path)
-            )
-            self._docks.file_list.repaint()
+        self._set_output_dir(output_dir)
 
     def _save_label_file(self, *, save_as: bool = False) -> None:
         assert not self._image.isNull(), "cannot save empty image"
@@ -2747,7 +2851,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         )
         if dir_path:
-            self._load_from_file_or_dir(file_or_dir=dir_path)
+            self._open_image_dir(dir_path)
 
     @property
     def image_list(self) -> list[str]:
@@ -2795,6 +2899,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._docks.file_dock.setToolTip("")
 
         self._prev_opened_dir = root_dir
+        self._add_dir_history(self._image_dir_history, root_dir)
+        self._refresh_dir_history_widgets()
         self._image_path = None
         self._docks.file_list.clear()
 
