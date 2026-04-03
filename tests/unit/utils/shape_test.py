@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import skimage.measure
 
 from labelme._label_file import ShapeDict
 from labelme.utils import shape as shape_module
@@ -191,3 +192,24 @@ def test_masks_to_bboxes_raises_for_all_false_mask() -> None:
     masks = np.zeros((1, 10, 10), dtype=bool)
     with pytest.raises(ValueError):
         shape_module.masks_to_bboxes(masks)
+
+
+def test_connect_two_polygons_creates_single_connected_polygon() -> None:
+    img_shape = (100, 100)
+    polygon1 = [[10, 10], [30, 10], [30, 40], [10, 40]]
+    polygon2 = [[60, 12], [80, 12], [80, 42], [60, 42]]
+
+    connected_polygon = shape_module.connect_two_polygons(
+        img_shape, polygon1, polygon2
+    )
+
+    assert connected_polygon.shape[0] >= 4
+
+    merged_mask = shape_module.shape_to_mask(
+        img_shape, connected_polygon.tolist(), shape_type="polygon"
+    )
+    assert skimage.measure.label(merged_mask).max() == 1
+
+    polygon1_mask = shape_module.shape_to_mask(img_shape, polygon1, shape_type="polygon")
+    polygon2_mask = shape_module.shape_to_mask(img_shape, polygon2, shape_type="polygon")
+    assert merged_mask.sum() > (polygon1_mask | polygon2_mask).sum()

@@ -114,6 +114,7 @@ class _Actions(NamedTuple):
     delete_file: QtGui.QAction
     toggle_keep_prev_mode: QtGui.QAction
     toggle_keep_prev_brightness_contrast: QtGui.QAction
+    connect_polygon: QtGui.QAction
     delete: QtGui.QAction
     edit: QtGui.QAction
     duplicate: QtGui.QAction
@@ -361,6 +362,13 @@ class MainWindow(QtWidgets.QMainWindow):
             ),
             checkable=True,
             checked=self._config["keep_prev_brightness_contrast"],
+        )
+        connect_polygon = action(
+            text=self.tr("Connect Polygon"),
+            slot=self.connect_selected_polygons,
+            icon=None,
+            tip=self.tr("Connect two selected polygons with the same label"),
+            enabled=False,
         )
         delete = action(
             self.tr("Delete Shapes"),
@@ -701,6 +709,7 @@ class MainWindow(QtWidgets.QMainWindow):
         context_menu = (
             *[draw_action for _, draw_action in draw],
             edit_mode,
+            connect_polygon,
             edit,
             duplicate,
             copy,
@@ -737,6 +746,7 @@ class MainWindow(QtWidgets.QMainWindow):
             delete_file=delete_file,
             toggle_keep_prev_mode=keep_prev_action,
             toggle_keep_prev_brightness_contrast=toggle_keep_prev_brightness_contrast,
+            connect_polygon=connect_polygon,
             delete=delete,
             edit=edit,
             duplicate=duplicate,
@@ -1621,6 +1631,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._actions.duplicate.setEnabled(n_selected)
         self._actions.copy.setEnabled(n_selected)
         self._actions.edit.setEnabled(n_selected)
+        self._actions.connect_polygon.setEnabled(
+            self._can_connect_selected_polygons(self._get_selected_shapes_for_action())
+        )
 
     def add_label(self, shape: Shape) -> None:
         assert shape.label is not None
@@ -2602,6 +2615,81 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.has_no_shapes():
             for action in self._actions.on_shapes_present:
                 action.setEnabled(False)
+
+    def _get_selected_shapes_for_action(self) -> list[Shape]:
+        selected_shapes: list[Shape] = list(self._canvas_widgets.canvas.selected_shapes)
+        if len(selected_shapes) >= 2:
+            return selected_shapes
+
+        label_list_shapes = [
+            item.shape() for item in self._docks.label_list.selected_items()
+        ]
+        if len(label_list_shapes) >= len(selected_shapes):
+            return label_list_shapes
+        return selected_shapes
+
+    def _can_connect_selected_polygons(self, selected_shapes: list[Shape]) -> bool:
+        if len(selected_shapes) != 2:
+            return False
+        shape1, shape2 = selected_shapes
+        return (
+            shape1.shape_type == "polygon"
+            and shape2.shape_type == "polygon"
+            and shape1.label is not None
+            and shape1.label == shape2.label
+        )
+
+    def connect_selected_polygons(self) -> None:
+        selected_shapes = self._get_selected_shapes_for_action()
+        if not self._can_connect_selected_polygons(selected_shapes):
+            self.show_error_message(
+                self.tr("Cannot connect polygons"),
+                self.tr("Select exactly two polygons with the same label."),
+            )
+            return
+
+        shape1, shape2 = selected_shapes
+        try:
+            connected_polygon = utils.connect_two_polygons(
+                img_shape=(self._image.height(), self._image.width()),
+                polygon1=shape1.points.tolist(),
+                polygon2=shape2.points.tolist(),
+            )
+        except ValueError as e:
+            self.show_error_message(self.tr("Cannot connect polygons"), self.tr(str(e)))
+            return
+
+        merged_shape = Shape(
+            label=shape1.label,
+            shape_type="polygon",
+            group_id=shape1.group_id if shape1.group_id == shape2.group_id else None,
+            description=shape1.description or shape2.description,
+            flags={},
+            points=connected_polygon,
+            point_labels=np.ones(len(connected_polygon), dtype=np.int_),
+            closed=True,
+        )
+
+        flags1 = shape1.flags or {}
+        flags2 = shape2.flags or {}
+        merged_shape.flags = {
+            key: bool(flags1.get(key, False) or flags2.get(key, False))
+            for key in set(flags1) | set(flags2)
+        }
+        merged_shape.other_data = shape1.other_data.copy()
+
+        self.remove_labels(selected_shapes)
+        self._canvas_widgets.canvas.shapes = [
+            shape
+            for shape in self._canvas_widgets.canvas.shapes
+            if shape not in selected_shapes
+        ]
+        self.add_label(merged_shape)
+        self._canvas_widgets.canvas.shapes.append(merged_shape)
+        self._canvas_widgets.canvas.backup_shapes()
+        self._canvas_widgets.canvas.select_shapes([merged_shape])
+        self._canvas_widgets.canvas.update()
+        self.mark_dirty()
 
     def copy_shape(self) -> None:
         self._canvas_widgets.canvas.end_move(copy=True)

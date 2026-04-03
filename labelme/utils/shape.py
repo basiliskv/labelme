@@ -9,6 +9,7 @@ import uuid
 import numpy as np
 import PIL.Image
 import PIL.ImageDraw
+import skimage.measure
 from numpy.typing import NDArray
 
 from labelme._label_file import ShapeDict
@@ -116,3 +117,100 @@ def masks_to_bboxes(masks: NDArray[np.bool_]) -> NDArray[np.float32]:
         (y1, x1), (y2, x2) = where.min(0), where.max(0) + 1
         bboxes.append((y1, x1, y2, x2))
     return np.asarray(bboxes, dtype=np.float32)
+
+
+def _get_contour_length(contour: NDArray[np.float32]) -> float:
+    contour_start: NDArray[np.float32] = contour
+    contour_end: NDArray[np.float32] = np.r_[contour[1:], contour[0:1]]
+    return float(np.linalg.norm(contour_end - contour_start, axis=1).sum())
+
+
+def _compute_polygon_from_mask(mask: NDArray[np.bool_]) -> NDArray[np.float32]:
+    contours = skimage.measure.find_contours(np.pad(mask, pad_width=1))
+    if len(contours) == 0:
+        raise ValueError("No contour found from the merged mask")
+
+    contour: NDArray[np.float32] = max(contours, key=_get_contour_length)
+    polygon: NDArray[np.float32] = skimage.measure.approximate_polygon(
+        coords=contour,
+        tolerance=np.ptp(contour, axis=0).max() * 0.004,
+    )
+    polygon = np.clip(polygon, (0, 0), (mask.shape[0] - 1, mask.shape[1] - 1))
+    polygon = polygon[:-1]
+    return polygon[:, ::-1]
+
+
+def _bridge_point_towards_other_polygon(
+    polygon: NDArray[np.float32],
+    other_start: NDArray[np.float32],
+    step_pixels: float,
+) -> NDArray[np.float32]:
+    start: NDArray[np.float32] = polygon[0]
+    target_direction: NDArray[np.float32] = other_start - start
+    target_norm = np.linalg.norm(target_direction)
+    if target_norm == 0:
+        target_direction = np.array([1.0, 0.0], dtype=np.float32)
+    else:
+        target_direction = target_direction / target_norm
+
+    best_score = -float("inf")
+    best_point: NDArray[np.float32] | None = None
+    for neighbor in (polygon[-1], polygon[1]):
+        edge: NDArray[np.float32] = neighbor - start
+        edge_norm = np.linalg.norm(edge)
+        if edge_norm == 0:
+            continue
+        edge_direction = edge / edge_norm
+        score: float = float(np.dot(edge_direction, target_direction))
+        step_ratio: float = min(0.45, step_pixels / edge_norm)
+        candidate = start + edge * step_ratio
+        if score > best_score:
+            best_score = score
+            best_point = candidate.astype(np.float32)
+
+    if best_point is None:
+        raise ValueError("Polygon must have a non-zero edge at its start point")
+    return best_point
+
+
+def connect_two_polygons(
+    img_shape: tuple[int, ...],
+    polygon1: list[list[float]] | NDArray[np.float32],
+    polygon2: list[list[float]] | NDArray[np.float32],
+) -> NDArray[np.float32]:
+    polygon1 = np.asarray(polygon1, dtype=np.float32)
+    polygon2 = np.asarray(polygon2, dtype=np.float32)
+    if polygon1.shape[0] < 3 or polygon2.shape[0] < 3:
+        raise ValueError("Both polygons must have at least 3 points")
+
+    start1: NDArray[np.float32] = polygon1[0]
+    start2: NDArray[np.float32] = polygon2[0]
+    bridge_length: float = float(np.linalg.norm(start2 - start1))
+    step_pixels: float = min(8.0, max(2.0, bridge_length * 0.03))
+
+    near1 = _bridge_point_towards_other_polygon(
+        polygon=polygon1, other_start=start2, step_pixels=step_pixels
+    )
+    near2 = _bridge_point_towards_other_polygon(
+        polygon=polygon2, other_start=start1, step_pixels=step_pixels
+    )
+
+    merged_mask: NDArray[np.bool_] = shape_to_mask(
+        img_shape, polygon1.tolist(), shape_type="polygon"
+    )
+    merged_mask |= shape_to_mask(img_shape, polygon2.tolist(), shape_type="polygon")
+    merged_mask |= shape_to_mask(
+        img_shape,
+        [start1.tolist(), near1.tolist(), start2.tolist()],
+        shape_type="polygon",
+    )
+    merged_mask |= shape_to_mask(
+        img_shape,
+        [near1.tolist(), near2.tolist(), start2.tolist()],
+        shape_type="polygon",
+    )
+
+    connected_polygon: NDArray[np.float32] = _compute_polygon_from_mask(merged_mask)
+    if connected_polygon.shape[0] < 3:
+        raise ValueError("Failed to generate a connected polygon")
+    return connected_polygon

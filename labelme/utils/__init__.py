@@ -23,6 +23,7 @@ from .qt import new_button
 from .qt import new_icon
 from .qt import project_point_on_line
 from .qt import project_point_on_perpendicular_line
+from .shape import connect_two_polygons
 from .shape import masks_to_bboxes
 from .shape import shape_to_mask
 from .shape import shapes_to_label
