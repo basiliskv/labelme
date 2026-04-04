@@ -1172,12 +1172,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
         image_dir_list = QtWidgets.QListWidget()
         image_dir_list.itemClicked.connect(self._open_image_dir_from_history)
+        image_dir_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        image_dir_list.customContextMenuRequested.connect(
+            lambda point: self._pop_directory_history_menu(
+                widget=image_dir_list,
+                point=point,
+            )
+        )
         image_dir = QtWidgets.QDockWidget(self.tr("Image Dirs"), self)
         image_dir.setObjectName("Image Dirs")
         image_dir.setWidget(image_dir_list)
 
         output_dir_list = QtWidgets.QListWidget()
         output_dir_list.itemClicked.connect(self._open_output_dir_from_history)
+        output_dir_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        output_dir_list.customContextMenuRequested.connect(
+            lambda point: self._pop_directory_history_menu(
+                widget=output_dir_list,
+                point=point,
+            )
+        )
         output_dir = QtWidgets.QDockWidget(self.tr("Output Dirs"), self)
         output_dir.setObjectName("Output Dirs")
         output_dir.setWidget(output_dir_list)
@@ -1524,6 +1538,38 @@ class MainWindow(QtWidgets.QMainWindow):
         if not output_dir or not osp.isdir(output_dir):
             return
         self._set_output_dir(output_dir)
+
+    def _pop_directory_history_menu(
+        self,
+        widget: QtWidgets.QListWidget,
+        point: QtCore.QPoint,
+    ) -> None:
+        item = widget.itemAt(point)
+        if item is None:
+            return
+
+        directory = item.data(Qt.UserRole)
+        if not directory or not osp.isdir(directory):
+            return
+
+        menu = QtWidgets.QMenu(widget)
+        open_action = QtWidgets.QAction(self.tr("Open In Explorer"), widget)
+        open_action.triggered.connect(
+            lambda _checked=False, directory=directory: self._open_directory_in_explorer(
+                directory
+            )
+        )
+        menu.addAction(open_action)
+        menu.exec_(widget.mapToGlobal(point))
+
+    def _open_directory_in_explorer(self, directory: str) -> None:
+        system: str = platform.system()
+        if system == "Darwin":
+            subprocess.Popen(["open", directory])
+        elif system == "Windows":
+            os.startfile(directory)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", directory])
 
     # Callbacks
 
