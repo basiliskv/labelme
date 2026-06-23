@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import math
 import uuid
+from typing import TYPE_CHECKING
 
 import numpy as np
 import PIL.Image
 import PIL.ImageDraw
 from numpy.typing import NDArray
 
-from labelme._label_file import ShapeDict
+if TYPE_CHECKING:
+    from labelme._label_file import ShapeDict
 
 
 def shape_to_mask(
