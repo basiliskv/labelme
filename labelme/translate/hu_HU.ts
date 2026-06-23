@@ -540,6 +540,10 @@ Váltson az AI Text-to-Annotation modellnél &apos;SAM3 (smart)&apos;-re, vagy �
         <translation>&lt;b&gt;%s&lt;/b&gt;</translation>
     </message>
     <message>
+        <source>AI inference failed: %s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Error opening file</source>
         <translation>Hiba a fájl megnyitásakor</translation>
     </message>

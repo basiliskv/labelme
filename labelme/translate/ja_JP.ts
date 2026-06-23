@@ -540,6 +540,10 @@ AI Text-to-Annotation モデルを &apos;SAM3 (smart)&apos; に切り替える�
         <translation>&lt;b&gt;%s&lt;/b&gt;</translation>
     </message>
     <message>
+        <source>AI inference failed: %s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Error opening file</source>
         <translation>ファイルを開けませんでした</translation>
     </message>

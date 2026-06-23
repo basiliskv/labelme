@@ -526,6 +526,10 @@ AI Text-to-Annotation 모델을 &apos;SAM3 (smart)&apos;(으)로 변경하거나
         <translation>&lt;b&gt;%s&lt;/b&gt;</translation>
     </message>
     <message>
+        <source>AI inference failed: %s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Error opening file</source>
         <translation>파일 열기 오류</translation>
     </message>
